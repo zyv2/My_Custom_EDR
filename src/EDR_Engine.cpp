@@ -1,3 +1,15 @@
+/*****************************************************************************
+ * @file        EDR_Engine.cpp
+ * @brief       My_Custom_EDR class implementation
+ * @author      Zied Sayari
+ *
+ *
+ * @details
+ * Evolving user-mode Endpoint Detection and Response prototype. Implements
+ * low-level Windows Debugging APIs to intercept injected modules, safely
+ * parse Portable Executable (PE) headers, and execute surgical inline memory
+ * patching (ret) to force safe initialization failure.
+ *****************************************************************************/
 
 #include "EDR_Engine.h"
 
@@ -301,7 +313,7 @@ void EDR_Engine::modify_entry_point(HANDLE hProc, LPVOID base_addr, DWORD file_s
 		DWORD old_protect;
 		VirtualProtectEx(hProc, dll_entry_addr, 1, PAGE_EXECUTE_READWRITE, &old_protect);
 		if (WriteProcessMemory(hProc, dll_entry_addr, "\xc3", 1, NULL)) {
-			std::cout << "	[SURGICAL REMEDIATION] Successfully patched entry point at: " << dll_entry_addr << "\n";
+			std::cout << "	[REMEDIATION ROUTINE] Successfully patched entry point at: " << dll_entry_addr << "\n";
 		}
 	}
 
@@ -325,7 +337,3 @@ EDR_Engine::~EDR_Engine() {
 	CloseHandle(pi.hThread);
 	ExitProcess(0);
 }
-
-
-
-

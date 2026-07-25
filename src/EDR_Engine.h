@@ -1,3 +1,17 @@
+/*****************************************************************************
+ * @file        EDR_Engine.cpp
+ * @brief       My_Custom_EDR class header
+ * @author      Zied Sayari
+ *
+ *
+ * @details
+ * Evolving user-mode Endpoint Detection and Response prototype. Implements
+ * low-level Windows Debugging APIs to intercept injected modules, safely
+ * parse Portable Executable (PE) headers, and execute surgical inline memory
+ * patching (ret) to force safe initialization failure.
+ *****************************************************************************/
+
+
 #pragma once
 #include <Windows.h>
 #include <psapi.h>
@@ -20,7 +34,10 @@ private:
 	BOOL process_creation_status = 0;
 	
 	// threats database
-	std::unordered_set<std::string> maliciouse_hashes = {"a3d2cc15de11fc08beb54a08827fee2f63fd8cec9c58273a912e37fb111c9d", "e7e19e9dbb93dd266b04fe62c1ee52bb86a423588305292ce7e929d0479df489", "45e8530e4005bb8fb19e176f7e3f979b6f1fe9c6827679d92bf522abf7613699"};
+	// unordered_set for constant lookup time
+
+	// Test hash for evil.dll
+	std::unordered_set<std::string> maliciouse_hashes = {"45e8530e4005bb8fb19e176f7e3f979b6f1fe9c6827679d92bf522abf7613699"};
 
 	const char* critical_dlls[3] = { "ntdll.dll", "kernel32.dll", "lsass.exe" };
 
@@ -56,7 +73,22 @@ private:
 	std::string hash_file(HANDLE);
 
 	
-	// Remediation
+	/*
+		REMEDIATION Function - evaluate_module()
+
+		- Stages of The Function:
+			Stage 1: Climb the PE structre to get the entry point offset
+			Stage 2: Add offset to base address of the DLL; Get Entry-point Address
+			Stage 3: SModify the first byte to be 0xc3 (ret)
+
+
+		- Internal Functions Used:
+			None
+
+		- Return Value:
+			None
+
+	*/
 	void modify_entry_point(HANDLE, LPVOID, DWORD);
 	
 	
