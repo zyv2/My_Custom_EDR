@@ -1,0 +1,14 @@
+*.obj
+*.ilk
+*.lst
+*.pch
+*.pdb
+*.exp
+*.lib
+*.tlog
+
+# Output directories created during compilation
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
