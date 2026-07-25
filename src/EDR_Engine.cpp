@@ -58,6 +58,7 @@ void EDR_Engine::monitor()
 	while (is_running) {
 		
 		if (!WaitForDebugEvent(&event, INFINITE)) {
+			free(temp_filename);
 			return;
 		}
 
@@ -96,6 +97,8 @@ void EDR_Engine::monitor()
 		ContinueDebugEvent(event.dwProcessId, event.dwThreadId, dwState);
 		dwState = DBG_CONTINUE;
 	}
+	free(temp_filename);
+	return;
 }
 
 
