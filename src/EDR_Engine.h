@@ -3,12 +3,6 @@
  * @brief       My_Custom_EDR class header
  * @author      Zied Sayari
  *
- *
- * @details
- * Evolving user-mode Endpoint Detection and Response prototype. Implements
- * low-level Windows Debugging APIs to intercept injected modules, safely
- * parse Portable Executable (PE) headers, and execute surgical inline memory
- * patching (ret) to force safe initialization failure.
  *****************************************************************************/
 
 
@@ -35,9 +29,9 @@ private:
 	
 	// threats database
 	// unordered_set for constant lookup time
-
-	// Test hash for evil.dll
-	std::unordered_set<std::string> maliciouse_hashes = {"45e8530e4005bb8fb19e176f7e3f979b6f1fe9c6827679d92bf522abf7613699"};
+	
+	// Add your signatures here
+	std::unordered_set<std::string> maliciouse_hashes = {""};
 
 	const char* critical_dlls[3] = { "ntdll.dll", "kernel32.dll", "lsass.exe" };
 
@@ -91,18 +85,24 @@ private:
 	*/
 	void modify_entry_point(HANDLE, LPVOID, DWORD);
 	
+
+	// Uses CreateRemoteThread to load agent.dll into the monitered program
+	BOOL inject_agent_dll(HANDLE, LPCSTR);
+
 	
+	// Communication with agent via pipes
+	static void PipeServerThread();
+	void StartPipeServer();
 
 public:
-	// avoid this for now
-	// not fully implemented
-	EDR_Engine(LPCWSTR);
 	
-	// Ready
+	// Create a Process with DEBUG_PROCESS flag
 	EDR_Engine(LPCSTR);
+
 
 	// Telemetry
 	void monitor();
+
 
 	// INFO functions
 	void show_process_info();

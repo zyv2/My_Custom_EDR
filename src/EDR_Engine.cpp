@@ -5,100 +5,192 @@
  *
  *
  * @details
- * Evolving user-mode Endpoint Detection and Response prototype. Implements
- * low-level Windows Debugging APIs to intercept injected modules, safely
- * parse Portable Executable (PE) headers, and execute surgical inline memory
- * patching (ret) to force safe initialization failure.
+ * Evolving user-mode Endpoint Detection and Response prototype. 
+ * Implements low-level Windows Debugging APIs to intercept injected modules. 
+ * Parse PE headers and patchs the DLL entry point with a ret instruction
+ * Injects a custom agent.dll to perfom API hooking
+ * Supported API Functions that this EDR hook:
+ * - LdrLoadDll  -> hook payload -> print DllName->buffer, DllHandle -> hook MessageBoxA when User32.dll is loaded
+ * - MessageBoxA -> hook payload -> print parameters -> modify paramters:
+ *		LPCSTR custom_lpText = "EDR Hooked This!";
+ *		LPCSTR custom_lpCaption = "Hello from EDR";
+ *		UINT custom_uType = 1;
+ * 
+
  *****************************************************************************/
 
 #include "EDR_Engine.h"
+#include <thread>
 
 
-EDR_Engine::EDR_Engine(LPCWSTR program_path) {
-	si = malloc(sizeof(STARTUPINFOW));
-	
-
-
-	if (si) {
-		ZeroMemory(si, sizeof(STARTUPINFOW));
-		
-		// Used the Wide char because its faster
-		// Windows is built on wide string
-		// even when using the `A` version its converted and the `W` version is called under the hood
-		process_creation_status = CreateProcessW(program_path, NULL, NULL, NULL, false, DEBUG_ONLY_THIS_PROCESS, NULL, NULL, (LPSTARTUPINFOW)si, &pi);
-	}
-}
 
 EDR_Engine::EDR_Engine(LPCSTR program_path) {
-
+	StartPipeServer();
 
 	si = malloc(sizeof(STARTUPINFOA));
 	
 	if (si) {
 		ZeroMemory(si, sizeof(STARTUPINFOA));
-		process_creation_status = CreateProcessA(program_path, NULL, NULL, NULL, false, DEBUG_ONLY_THIS_PROCESS, NULL, NULL, (LPSTARTUPINFOA)si, &pi);
+		process_creation_status = CreateProcessA(
+			program_path, 
+			NULL, NULL, NULL, false, 
+			DEBUG_PROCESS, NULL, NULL, (LPSTARTUPINFOA)si, &pi);
 	}
 }
 
+// CARE
+void EDR_Engine::PipeServerThread() {
+	HANDLE hPipe = CreateNamedPipeA(
+		"\\\\.\\pipe\\EDR_LogPipe",
+		PIPE_ACCESS_INBOUND,                   // Controller only reads
+		PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+		1,                                     // Single instance
+		1024, 1024,
+		0, NULL
+	);
+
+	if (hPipe == INVALID_HANDLE_VALUE) {
+		std::cout << "[-] Failed to create Named Pipe. Error: " << GetLastError() << "\n";
+		return;
+	}
+
+	std::cout << "[+] EDR Pipe Server listening on \\\\.\\pipe\\EDR_LogPipe...\n";
+
+	while (true) {
+		// Wait for Agent DLL to connect
+		if (ConnectNamedPipe(hPipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED) {
+			char buffer[512] = { 0 };
+			DWORD bytesRead = 0;
+
+			// Read log messages while Agent is connected
+			while (ReadFile(hPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+				buffer[bytesRead] = '\0';
+				std::cout << buffer << std::endl;
+			}
+
+			DisconnectNamedPipe(hPipe);
+		}
+	}
+
+	CloseHandle(hPipe);
+}
+// CARE
+void EDR_Engine::StartPipeServer() {
+	// Run pipe server in a background thread so it doesn't block the EDR main loop
+	std::thread(EDR_Engine::PipeServerThread).detach();
+}
+
+
+
+
 void EDR_Engine::monitor()
-{	
+{
 	DWORD dwState = DBG_CONTINUE;
 	bool is_running = true;
 	DEBUG_EVENT event = { 0 };
 	HANDLE hProcess = 0;
 	DWORD file_size = 0;
-
+	BOOL isAgentInjected = FALSE;
 
 	char* temp_filename = (char*)malloc(MAX_PATH + 1);
 	if (temp_filename) {
 		ZeroMemory(temp_filename, MAX_PATH + 1);
 	}
 
-
 	while (is_running) {
-		
+
 		if (!WaitForDebugEvent(&event, INFINITE)) {
-			free(temp_filename);
-			return;
+			break;
 		}
+
+		dwState = DBG_CONTINUE;
 
 		switch (event.dwDebugEventCode) {
 
 		case CREATE_PROCESS_DEBUG_EVENT:
 			hProcess = event.u.CreateProcessInfo.hProcess;
 			printf("Process Created With Handle : %p\n", hProcess);
+			ResumeThread(pi.hThread);
 			break;
 
 		case LOAD_DLL_DEBUG_EVENT:
-			handle_to_filename(event.u.LoadDll.hFile, &temp_filename);
-			printf("DLL Has Been Loaded With Handle : %p\nDLL Path : %s\n", event.u.LoadDll.hFile, temp_filename);
-			
-			translate_path(temp_filename);
-			printf("DOS Path : %s\n", temp_filename);
-
-			puts("");
+			if (temp_filename) {
+				handle_to_filename(event.u.LoadDll.hFile, &temp_filename);
+				translate_path(temp_filename);
+			}
+			if (!isAgentInjected) {
+				inject_agent_dll(hProcess, "C:\\Users\\Public\\agent.dll");
+				isAgentInjected = TRUE;
+				printf("[+] agent Injected on first LOAD_DLL event!\n");
+			}
 
 			if (evaluate_module(event.u.LoadDll.hFile, temp_filename)) {
-				// remdiete
 				puts("[!] Remediation Phase:");
-				file_size = GetFileSize(event.u.LoadDll.hFile, 0);
+				if (file_size == 0)
+					file_size = GetFileSize(event.u.LoadDll.hFile, 0);
 				modify_entry_point(hProcess, event.u.LoadDll.lpBaseOfDll, file_size);
 			}
-			
-			// check and cleanup 
+
 			if (event.u.LoadDll.hFile != NULL && event.u.LoadDll.hFile != INVALID_HANDLE_VALUE) {
 				CloseHandle(event.u.LoadDll.hFile);
 			}
 			break;
-		default:
-			dwState = DBG_CONTINUE;
+
+		case EXIT_PROCESS_DEBUG_EVENT:
+			is_running = false;
+			break;
 		}
 
+		// CRITICAL: Continue debugging on every single iteration outside the switch block
 		ContinueDebugEvent(event.dwProcessId, event.dwThreadId, dwState);
-		dwState = DBG_CONTINUE;
 	}
-	free(temp_filename);
-	return;
+
+	// Cleanup runs *only after* the process exits and the loop breaks
+	if (temp_filename) {
+		free(temp_filename);
+	}
+	CloseHandle(pi.hProcess);
+	CloseHandle(pi.hThread);
+}
+
+
+BOOL EDR_Engine::inject_agent_dll(HANDLE hProc, LPCSTR dll_path)
+{
+	BOOL success = false;
+
+	char full_dll_path[MAX_PATH] = { 0 };
+	if (!GetFullPathNameA(dll_path, MAX_PATH, full_dll_path, NULL))
+		return success;
+
+	const LPVOID virtual_dll_name_address = VirtualAllocEx(hProc, NULL, MAX_PATH, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (!virtual_dll_name_address)
+		return success;
+
+	if (!WriteProcessMemory(hProc, virtual_dll_name_address, full_dll_path, MAX_PATH, NULL)) {
+		VirtualFreeEx(hProc, virtual_dll_name_address, 0, MEM_RELEASE);
+		return success;
+	}
+
+	const HMODULE hMod = GetModuleHandleA("kernel32.dll");
+	if (!hMod) {
+		VirtualFreeEx(hProc, virtual_dll_name_address, 0, MEM_RELEASE);
+		return success;
+	}
+
+	const FARPROC load_lib_addr = GetProcAddress(hMod, "LoadLibraryA");
+	if (!load_lib_addr) {
+		VirtualFreeEx(hProc, virtual_dll_name_address, 0, MEM_RELEASE);
+		return success;
+	}
+
+
+	const HANDLE thread_handle = CreateRemoteThread(hProc, NULL, 0, (LPTHREAD_START_ROUTINE)load_lib_addr, virtual_dll_name_address, 0, NULL);
+	if (thread_handle == NULL) {
+		VirtualFreeEx(hProc, virtual_dll_name_address, 0, MEM_RELEASE);
+		return success;
+	}
+	success ^= true;
+	return success;
 }
 
 
@@ -274,7 +366,7 @@ void EDR_Engine::modify_entry_point(HANDLE hProc, LPVOID base_addr, DWORD file_s
 	if (file_size < sizeof(IMAGE_DOS_HEADER))
 		return;
 
-	BYTE* mem = (BYTE *)malloc(file_size);
+	BYTE* mem = (BYTE *)malloc(file_size + 1);
 	if (!mem)
 		return;
 
@@ -338,5 +430,4 @@ EDR_Engine::~EDR_Engine() {
 	free(si);
 	CloseHandle(pi.hProcess);
 	CloseHandle(pi.hThread);
-	ExitProcess(0);
 }
