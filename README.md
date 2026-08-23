@@ -11,7 +11,7 @@ At its core, My Custom EDR is a lightweight security monitor that acts like a sp
 
 Instead of waiting for a file to run on the hard drive, this tool watches the application's live memory inside a native Windows debugging loop. When a new module or DLL tries to inject itself into the process space, the tool halts execution instantly to inspect it. 
 
-It checks the file's path for spoofing, verifies its digital blueprint against a list of known threat signatures, and parses its internal headers to make sure it is safe. If the engine catches a threat, it doesn't just crash the main program. Instead, it surgically rewrites a tiny piece of the loading DLL's memory, causing the module to fail quietly and allowing the main application to keep running without missing a beat.
+It checks the file's path for spoofing, verifies its digital blueprint against a list of known threat signatures, and parses its internal headers to make sure it is safe. If the engine catches a threat, it doesn't just crash the main program. Instead, it surgically rewrites a tiny piece of the loading DLL's memory, causing the module to fail quietly and allowing the main application to keep running without missing a beat. Also Performing API hooking to manipulation and log parameters.
 
 ## The Subsystem Layout & Code Architecture
 
@@ -27,3 +27,25 @@ The header file serves as the main blueprint for the security tool. It sets up s
 * **Instant Signature Matching:** The tool tracks malicious files using an `std::unordered_set`. This keeps threat lookup times constant, meaning the engine can immediately recognize a known bad file hash without slowing down the app it is trying to protect.
 * **Strict Structural Separation:** All dangerous or heavy inner actions—like streaming file hashes (`hash_file`), checking folder paths, and writing memory patches—are locked behind a `private` security wall. The rest of the project can only see simple, safe controls like starting the tracking engine (`.monitor()`) or printing diagnostics (`.show_process_info()`).
 * **Fast Cryptographic Analysis:** The header pulls in native Windows security libraries (`bcrypt.lib`). Instead of adding bulky third-party code to calculate file hashes, the engine drops directly into the operating system's built-in hashing tools to quickly identify threats.
+
+## Injection Timing & The Loader Lock
+We anchor our monitoring to the first LOAD_DLL_DEBUG_EVENT to catch dynamic modules early.
+
+Inside our injected agent, we avoid Loader Lock deadlocks by keeping execution synchronous inside DllMain:
+
+```c
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
+        agent_main(); // Must run synchronously to avoid deadlocks
+    }
+    return TRUE;
+}
+```
+
+## Inline API Hooking & Active Remediation
+Our hooks sit inline right before target APIs execute, allowing us to intercept calls and inspect or alter behavior on the fly:
+
+LdrLoadDll Hook: Intercepts runtime DLL loading to inspect incoming modules, verify file paths, and track what binaries are being loaded into the process space.
+
+MessageBoxA Hook: Intercepts calls to alter message content or demonstrate runtime parameter manipulation during debugging and testing.
