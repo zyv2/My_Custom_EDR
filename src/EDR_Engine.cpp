@@ -10,13 +10,18 @@
  * Parse PE headers and patchs the DLL entry point with a ret instruction
  * Injects a custom agent.dll to perfom API hooking
  * Supported API Functions that this EDR hook:
- * - LdrLoadDll  -> hook payload -> print DllName->buffer, DllHandle -> hook MessageBoxA when User32.dll is loaded
- * - MessageBoxA -> hook payload -> print parameters -> modify paramters:
+ * - LdrLoadDll  -> Log parameters and hook MessageBoxA when User32.dll is loaded
+ * - MessageBoxA -> Log parameters and modify paramters:
  *		LPCSTR custom_lpText = "EDR Hooked This!";
  *		LPCSTR custom_lpCaption = "Hello from EDR";
  *		UINT custom_uType = 1;
+ * - NtOpenProcess -> Log parameters
+ * - NtAllocateVirtualMemory -> Log parameters
+ * - NtAllocateVirtualMemoryEx -> Log parameters
+ * - NtWriteVirtualMemory -> Log parameters
+ * - NtProtectVirtualMemory -> Log parameters
+ * - NtCreateThreadEx -> Log parameters
  * 
-
  *****************************************************************************/
 
 #include "EDR_Engine.h"
@@ -111,6 +116,11 @@ void EDR_Engine::monitor()
 			hProcess = event.u.CreateProcessInfo.hProcess;
 			printf("Process Created With Handle : %p\n", hProcess);
 			ResumeThread(pi.hThread);
+			if (!isAgentInjected) {
+				inject_agent_dll(hProcess, "C:\\Users\\Public\\agent.dll");
+				isAgentInjected = TRUE;
+				printf("[+] agent Injected on first LOAD_DLL event!\n");
+			}
 			break;
 
 		case LOAD_DLL_DEBUG_EVENT:
@@ -118,11 +128,7 @@ void EDR_Engine::monitor()
 				handle_to_filename(event.u.LoadDll.hFile, &temp_filename);
 				translate_path(temp_filename);
 			}
-			if (!isAgentInjected) {
-				inject_agent_dll(hProcess, "C:\\Users\\Public\\agent.dll");
-				isAgentInjected = TRUE;
-				printf("[+] agent Injected on first LOAD_DLL event!\n");
-			}
+			
 
 			if (evaluate_module(event.u.LoadDll.hFile, temp_filename)) {
 				puts("[!] Remediation Phase:");

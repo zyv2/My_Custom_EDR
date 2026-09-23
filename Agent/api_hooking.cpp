@@ -11,21 +11,171 @@
 #include "pch.h"
 #include "api_hooking.h"
 #include "communication.h"
-#include <winternl.h>
+#include <iostream>
 
 //#define PRINT
 
 
 func_ptr_LdrLoadDll ptr_original_LdrLoadDll = NULL;
 func_ptr_MessageBoxA ptr_original_MessageBoxA = NULL;
+func_ptr_NtCreateThreadEx ptr_original_NtCreateThreadEx = NULL;
+func_ptr_NtOpenProcess ptr_original_NtOpenProcess = NULL;
+func_ptr_NtAllocateVirtualMemoryEx ptr_original_NtAllocateVirtualMemoryEx = NULL;
+func_ptr_NtAllocateVirtualMemory ptr_original_NtAllocateVirtualMemory = NULL;
+func_ptr_NtWriteVirtualMemory ptr_original_NtWriteVirtualMemory = NULL;
+func_ptr_NtProtectVirtualMemory ptr_original_NtProtectVirtualMemory = NULL;
 
+NTSTATUS NTAPI hooked_NtCreateThreadEx(PHANDLE ThreadHandle,
+    ACCESS_MASK DesiredAccess,
+    PCOBJECT_ATTRIBUTES ObjectAttributes,
+    HANDLE ProcessHandle,
+    PUSER_THREAD_START_ROUTINE StartRoutine,
+    PVOID Argument,
+    ULONG CreateFlags,
+    SIZE_T ZeroBits,
+    SIZE_T StackSize,
+    SIZE_T MaximumStackSize,
+    PPS_ATTRIBUTE_LIST AttributeList
+)
+{
+    if (!ptr_original_NtCreateThreadEx) {
+        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to NtCreateThreadEx");
+        return 0l;
+    }
+
+    NTSTATUS status = ptr_original_NtCreateThreadEx(ThreadHandle,
+        DesiredAccess,
+        ObjectAttributes,
+        ProcessHandle,
+        StartRoutine,
+        Argument,
+        CreateFlags,
+        ZeroBits,
+        StackSize,
+        MaximumStackSize,
+        AttributeList);
+
+   
+
+    if (NT_SUCCESS(status)) {
+        LogToEDR("[HOOK HIT] NtCreateThreadEx is called \
+        \n\tStartRoutine : %p \
+        \n\tThreadHandle : %p \
+        \n\tProcessHandle : %p\n"
+            , StartRoutine, *ThreadHandle, ProcessHandle);
+    }
+    
+
+    return status;
+}
+
+NTSTATUS hooked_NtOpenProcess(PHANDLE ProcessHandle, ACCESS_MASK DesiredAccess, PCOBJECT_ATTRIBUTES ObjectAttributes, PCLIENT_ID ClientId)
+{
+    if (!ptr_original_NtOpenProcess) {
+        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to NtOpenProcess");
+        return 0l;
+    }
+    NTSTATUS status = ptr_original_NtOpenProcess(ProcessHandle, DesiredAccess, ObjectAttributes, ClientId);
+    
+    if (NT_SUCCESS(status)) {
+        LogToEDR("[HOOK HIT] NtOpenProcess is called \
+        \n\tProcessHandle : %p\
+        \n\tPID : %lu\
+        \n\tDesiredAccess: %x\n"
+            , *ProcessHandle, ClientId->UniqueProcess, DesiredAccess);
+    }
+    return status;
+}
+
+NTSTATUS hooked_NtAllocateVirtualMemory(HANDLE ProcessHandle, PVOID* BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG AllocationType, ULONG PageProtection)
+{
+    if (!ptr_original_NtAllocateVirtualMemory) {
+        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to NtAllocateVirtualMemory");
+        return 0l;
+    }
+    NTSTATUS status = ptr_original_NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, PageProtection);
+
+    PVOID allocated_addr = (BaseAddress != NULL && NT_SUCCESS(status)) ? *BaseAddress : NULL;
+    SIZE_T allocated_size = (RegionSize != NULL) ? *RegionSize : 0;
+
+    // This "(INT64)ProcessHandle != -1" should not be here only for testing to catch what matters.
+    if (NT_SUCCESS(status) && (INT64)ProcessHandle != -1) {
+        LogToEDR("[HOOK HIT] NtAllocateVirtualMemoryEx is called \
+        \n\tProcessHandle : %p \
+        \n\tBaseAddress : %p \
+        \n\tRegionSize : %u\
+        \n\tPageProtection: %x\n"
+            , ProcessHandle, allocated_addr, allocated_size, PageProtection);
+    }
+    return status;
+}
+
+NTSTATUS hooked_NtAllocateVirtualMemoryEx(HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG AllocationType, ULONG PageProtection, PMEM_EXTENDED_PARAMETER ExtendedParameters, ULONG ExtendedParameterCount)
+{
+    if (!ptr_original_NtAllocateVirtualMemoryEx) {
+        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to NtAllocateVirtualMemoryEx");
+        return 0l;
+    }
+    NTSTATUS status = ptr_original_NtAllocateVirtualMemoryEx(ProcessHandle, BaseAddress, RegionSize, AllocationType, PageProtection, ExtendedParameters, ExtendedParameterCount);
+
+    PVOID allocated_addr = (BaseAddress != NULL && NT_SUCCESS(status)) ? *BaseAddress : NULL;
+    SIZE_T allocated_size = (RegionSize != NULL) ? *RegionSize : 0;
+    if (NT_SUCCESS(status) && (INT64)ProcessHandle != -1) {
+        LogToEDR("[HOOK HIT] NtAllocateVirtualMemoryEx is called \
+        \n\tProcessHandle : %p \
+        \n\tBaseAddress : %p \
+        \n\tRegionSize : %u\
+        \n\tPageProtection: %x\n"
+            , ProcessHandle, allocated_addr, allocated_size, PageProtection);
+   }
+   return status;
+}
+
+NTSTATUS hooked_NtWriteVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress, PVOID Buffer, SIZE_T NumberOfBytesToWrite, PSIZE_T NumberOfBytesWritten)
+{
+    if (!ptr_original_NtWriteVirtualMemory) {
+        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to NtWriteVirtualMemory");
+        return 0l;
+    }
+    NTSTATUS status = ptr_original_NtWriteVirtualMemory(ProcessHandle, BaseAddress, Buffer, NumberOfBytesToWrite, NumberOfBytesWritten);
+    if (NT_SUCCESS(status)) {
+        LogToEDR("[HOOK HIT] NtWriteVirtualMemory is called \
+        \n\tProcessHandle : %p \
+        \n\tBaseAddress : %p \
+        \n\tBufferAddress : %p \
+        \n\tNumberOfBytesToWrite : %u\n"
+            , ProcessHandle, BaseAddress, Buffer, NumberOfBytesToWrite);
+    }
+    return status;
+}
+
+NTSTATUS hooked_NtProtectVirtualMemory(HANDLE ProcessHandle, PVOID* BaseAddress, PSIZE_T RegionSize, ULONG NewProtection, PULONG OldProtection)
+{
+    if (!ptr_original_NtProtectVirtualMemory) {
+        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to NtProtectVirtualMemory");
+        return 0l;
+    }
+    NTSTATUS status = ptr_original_NtProtectVirtualMemory(ProcessHandle, BaseAddress, RegionSize, NewProtection, OldProtection);
+
+    if (NT_SUCCESS(status) && (INT64)ProcessHandle != -1) {
+        LogToEDR("[HOOK HIT] NtProtectVirtualMemory is called \
+        \n\tProcessHandle : %p \
+        \n\tBaseAddress : %p \
+        \n\tNewProtection : %x \
+        \n\tOldProtection : %x\n"
+            , ProcessHandle, BaseAddress, NewProtection, *OldProtection);
+    }
+    
+
+    return status;
+}
 
 // hooked_LdrLoadDll logs DllName and DllHandle then call original function and finally if user32.dll is loaded hook it
 NTSTATUS NTAPI hooked_LdrLoadDll(PCWSTR DllPath, PULONG DllCharacteristics, PCUNICODE_STRING DllName, PHANDLE DllHandle) {
     char safeDllName[256] = {0};
     WstrToAnsi(DllName->Buffer, safeDllName, sizeof(safeDllName) - 1);
 
-    LogToEDR("[HOOK HIT] LdrLoadDll called for: %s (HandlePtr: %p)", safeDllName, DllHandle);
+    LogToEDR("[HOOK HIT] LdrLoadDll called for: %s (HandlePtr: %p)\n", safeDllName, DllHandle);
 
     if (!ptr_original_LdrLoadDll) {
         LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to LdrLoadDll");
@@ -48,6 +198,7 @@ NTSTATUS NTAPI hooked_LdrLoadDll(PCWSTR DllPath, PULONG DllCharacteristics, PCUN
             setup_hook(MessageBoxA_address, hooked_MessageBoxA, 7, (LPVOID*)&ptr_original_MessageBoxA);
             LogToEDR("[+] MessageBoxA is hooked.\n");
         }
+
     }
     
 
@@ -65,10 +216,8 @@ int WINAPI hooked_MessageBoxA(HWND hWnd, LPCSTR lpText, LPCSTR lpCaption, UINT u
         \n\tuType: %lu\n"
         , hWnd, lpText, lpCaption, uType);
 
-
-
     if (!ptr_original_MessageBoxA) {
-        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to MessageBoxA");
+        LogToEDR("[AGENT LOG] Failed to get the return address to resume the original call to MessageBoxA\n");
         return IDOK;
     }
     LPCSTR custom_lpText = "EDR Hooked This!";
@@ -122,11 +271,9 @@ LPVOID allocate_mem_around_function(LPVOID target_function) {
 // write an absolute jump to provided address inside the dest address, using RAX register
 BOOL write_jmp_rax(LPVOID ptr_where_to_write_jump, LPVOID address_to_jump_to) {
 
-    //BYTE jmp_rax_instructions[] = { 0x49, 0xBE, 0x00, 0x00 , 0x00 , 0x00, 0x00 , 0x00 , 0x00 , 0x00 // movabs r14, 0x00
-    //, 0x41, 0xFF, 0xE6};                                                                    // jmp    r14
+    BYTE jmp_rax_instructions[] = { 0x48, 0xB8, 0x00, 0x00 , 0x00 , 0x00, 0x00 , 0x00 , 0x00 , 0x00 // mov rax, 8-bytes address
+        , 0xFF, 0xE0};   // jmp rax
 
-    BYTE jmp_rax_instructions[] = { 0x48, 0xB8, 0x00, 0x00 , 0x00 , 0x00, 0x00 , 0x00 , 0x00 , 0x00 // movabs r14, 0x00
-        , 0xFF, 0xE0};   
     memcpy_s(jmp_rax_instructions + 2, sizeof(LPVOID), &address_to_jump_to, sizeof(LPVOID));
     DWORD old_protect = 0;
     if (!VirtualProtect(ptr_where_to_write_jump, sizeof(jmp_rax_instructions), PAGE_EXECUTE_READWRITE, &old_protect)) {
@@ -135,6 +282,27 @@ BOOL write_jmp_rax(LPVOID ptr_where_to_write_jump, LPVOID address_to_jump_to) {
 
     memcpy_s(ptr_where_to_write_jump, sizeof(jmp_rax_instructions), jmp_rax_instructions, sizeof(jmp_rax_instructions));
     
+    DWORD temp_protect = 0;
+    if (!VirtualProtect(ptr_where_to_write_jump, sizeof(jmp_rax_instructions), old_protect, &temp_protect)) {
+        return false;
+    }
+
+    return true;
+}
+
+BOOL write_jmp_r11(LPVOID ptr_where_to_write_jump, LPVOID address_to_jump_to) {
+
+    BYTE jmp_rax_instructions[] = { 0x49, 0xBB, 0x00, 0x00 , 0x00 , 0x00, 0x00 , 0x00 , 0x00 , 0x00 // mov r11, 8-bytes address
+        , 0x41, 0xFF, 0xE3 }; // jmp r11
+
+    memcpy_s(jmp_rax_instructions + 2, sizeof(LPVOID), &address_to_jump_to, sizeof(LPVOID));
+    DWORD old_protect = 0;
+    if (!VirtualProtect(ptr_where_to_write_jump, sizeof(jmp_rax_instructions), PAGE_EXECUTE_READWRITE, &old_protect)) {
+        return false;
+    }
+
+    memcpy_s(ptr_where_to_write_jump, sizeof(jmp_rax_instructions), jmp_rax_instructions, sizeof(jmp_rax_instructions));
+
     DWORD temp_protect = 0;
     if (!VirtualProtect(ptr_where_to_write_jump, sizeof(jmp_rax_instructions), old_protect, &temp_protect)) {
         return false;
@@ -167,14 +335,14 @@ UINT32 setup_trampoline(LPVOID mem_regoin, LPVOID hooked_function, UINT32 stolen
 
     LPVOID stolen_bytes_regoin = mem_regoin;
     LPVOID trampoline_jmp_back_regoin = (LPVOID)((BYTE*)mem_regoin + stolen_bytes_size);
-    LPVOID absolute_table_regoin = (LPVOID)((BYTE*)trampoline_jmp_back_regoin + 12); // 12 is the size of x64 absolute jump
+    LPVOID absolute_table_regoin = (LPVOID)((BYTE*)trampoline_jmp_back_regoin + 13); // 13 is the size of x64 r11 absolute jump
 
     // copy stolen bytes to 
     memcpy_s(stolen_bytes_regoin, stolen_bytes_size, hooked_function, stolen_bytes_size);
 
 
     LPVOID address_where_continue_from_hooked_func = (LPVOID)((BYTE*)hooked_function + stolen_bytes_size);
-    write_jmp_rax(trampoline_jmp_back_regoin, address_where_continue_from_hooked_func);
+    write_jmp_r11(trampoline_jmp_back_regoin, address_where_continue_from_hooked_func);
 
     
     UINT32 trampoline_size = (UINT32)((uintptr_t)absolute_table_regoin - (uintptr_t)mem_regoin) ;
